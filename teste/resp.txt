@@ -1,0 +1,55 @@
+{
+  "etapa_atual": "etapa0_briefing",
+  "grupo_atual": "1",
+  "titulo": "Briefing de publicação — grupo 1/2",
+  "perguntas_do_grupo": [
+    {
+      "id": "plataformas",
+      "pergunta": "A. Onde o anúncio vai rodar? (pode marcar várias)",
+      "opcoes": [
+        "Instagram Reels",
+        "Instagram/Facebook Stories",
+        "TikTok",
+        "YouTube Shorts",
+        "Kwai",
+        "YouTube horizontal / página de produto",
+        "Todas"
+      ]
+    },
+    {
+      "id": "objetivo",
+      "pergunta": "B. Objetivo do anúncio?",
+      "opcoes": [
+        "Venda direta (link/loja)",
+        "Reconhecimento de marca",
+        "Lançamento",
+        "Promoção/oferta",
+        "Recomendo por você"
+      ]
+    },
+    {
+      "id": "formato_anuncio",
+      "pergunta": "C. Formato de anúncio (gancho narrativo)?",
+      "opcoes": [
+        "Problema → solução",
+        "Demonstração de uso",
+        "Achadinho/descoberta",
+        "Unboxing",
+        "Antes e depois (só se verdadeiro e demonstrável)",
+        "Comparativo visual",
+        "Review espontâneo (UGC)",
+        "Recomendo por você"
+      ]
+    },
+    {
+      "id": "oferta_cta",
+      "pergunta": "D. Há preço, desconto, frete grátis ou prazo? Qual a chamada final (CTA)? Ex.: 'link na bio'. Se não souber, o CTA será genérico e sem número inventado.",
+      "opcoes": [
+        "(resposta livre)",
+        "Sem oferta específica — CTA genérico"
+      ]
+    }
+  ],
+  "proximo_passo": "Responda as perguntas acima. Use answer_question com o id da pergunta e a resposta.",
+  "anotacao": "A Etapa 0 (Briefing) deve ser respondida antes de enviar a imagem. O agente não deve avançar com decisões pendentes."
+}

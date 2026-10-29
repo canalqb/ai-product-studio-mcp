@@ -617,6 +617,146 @@ function proximaAcao(etapa) {
 function criarServidor() {
   const server = new McpServer({ name: "ai-product-studio-mcp", version: "1.0.0" });
 
+  server.tool("start_chat", "Inicia o fluxo em modo chat interativo (perguntas e respostas). Retorna as primeiras perguntas da Etapa 0 (Briefing) e o passo atual.", {}, async () => {
+    const estado = carregar();
+    estado.etapa_atual = "etapa0_briefing";
+    salvar(estado);
+    const perguntas = PERGUNTAS.etapa0_briefing;
+    const grupo = perguntas[0];
+    return ok(JSON.stringify({
+      etapa_atual: estado.etapa_atual,
+      grupo_atual: grupo.grupo,
+      titulo: grupo.titulo,
+      perguntas_do_grupo: grupo.perguntas.map((p) => ({ id: p.id, pergunta: p.pergunta, opcoes: p.opcoes, repetir: p.repetir })),
+      proximo_passo: "Responda as perguntas acima. Use answer_question com o id da pergunta e a resposta.",
+      anotacao: "A Etapa 0 (Briefing) deve ser respondida antes de enviar a imagem. O agente não deve avançar com decisões pendentes.",
+    }, null, 2));
+  });
+
+  server.tool("get_question", "Retorna a próxima pergunta do fluxo, agrupada (máx. 4 por vez), com o id da pergunta e opções. Para chat interativo.", {
+    etapa: z.string().optional().describe("Etapa (default: etapa_atual da sessão)"),
+    grupo: z.string().optional().describe("Grupo específico (ex.: 1, 2, tipo, pov, ugc_1)"),
+    repetir: z.boolean().optional().describe("Permitir repetir a mesma pergunta se o usuário não souber (máx. 3x)"),
+  }, async (args) => {
+    const estado = carregar();
+    const etapa = args.etapa || estado.etapa_atual;
+    const grupos = PERGUNTAS[etapa];
+    if (!grupos || !grupos.length) {
+      return fail(`Etapa '${etapa}' sem perguntas mapeadas. Etapas disponíveis: ${Object.keys(PERGUNTAS).join(", ")}.`);
+    }
+    const grupo = args.grupo ? grupos.find((x) => String(x.grupo) === String(args.grupo)) : grupos[0];
+    if (!grupo) return fail(`Grupo '${args.grupo || 'default'}' não encontrado na etapa '${etapa}'. Grupos: ${grupos.map((g) => g.grupo).join(", ")}.`);
+    const perguntas = [];
+    let repetido = false;
+    for (const p of grupo.perguntas) {
+      const repetidoAtual = estado.pendentes === p.id ? (estado.repeticoes && estado.repeticoes[p.id] || 0) : 0;
+      if (repetidoAtual > 0 && args.repetir !== true) {
+        repetido = true;
+        estado.pendentes = undefined;
+        continue;
+      }
+      perguntas.push({ id: p.id, pergunta: p.pergunta, opcoes: p.opcoes, repetir: p.repetir });
+      if (perguntas.length >= 4) break;
+    }
+    if (perguntas.length === 0) {
+      if (repetido) {
+        estado.pendentes = undefined;
+        salvar(estado);
+        return ok(JSON.stringify({ etapa_atual: estado.etapa_atual, perguntas: [], aviso: "Repetição máxima atingida. Responda ou use 'recomendo por você' se disponível.", continuar: true }, null, 2));
+      }
+    }
+    if (perguntas.length === 0 && !grupo.perguntas.length) {
+      return fail(`Grupo '${grupo.grupo}' não tem perguntas.`);
+    }
+    estado.etapa_atual = etapa;
+    if (!estado.pendentes) estado.pendentes = perguntas[0]?.id;
+    if (!estado.repeticoes) estado.repeticoes = {};
+    salvar(estado);
+    return ok(JSON.stringify({ etapa_atual: estado.etapa_atual, grupo_atual: grupo.grupo, titulo: grupo.titulo, perguntas: perguntas, sinopse: "Responda com answer_question. Use id = pergunta.id.", repetir: repetido }, null, 2));
+  });
+
+  server.tool("answer_question", "Responde uma pergunta do fluxo chat. O MCP salva a resposta e retorna a próxima pergunta.", {
+    pergunta_id: z.string().describe("Id da pergunta (ex.: plataformas, objetivo, tipo_video)"),
+    resposta: z.string().describe("Resposta do usuário (use 'recomendo por você' para recomendações automáticas)"),
+  }, async (args) => {
+    const estado = carregar();
+    const etapa = estado.etapa_atual;
+    const perguntas = PERGUNTAS[etapa];
+    if (!perguntas) return fail(`Etapa '${etapa}' não encontrada.`);
+    const grupo = perguntas.find((g) => g.perguntas.some((p) => p.id === args.pergunta_id));
+    if (!grupo) return fail(`Pergunta '${args.pergunta_id}' não encontrada nesta etapa. Perguntas disponíveis: ${perguntas.map((g) => g.perguntas.map((p) => p.id)).flat().join(", ")}.`);
+    const pergunta = grupo.perguntas.find((p) => p.id === args.pergunta_id);
+    if (!pergunta) return fail(`Pergunta '${args.pergunta_id}' não encontrada.`);
+    if (pergunta.opcoes && !pergunta.opcoes.includes(args.resposta) && args.resposta !== "recomendo por você") {
+      return fail(`Resposta inválida. Opções: ${pergunta.opcoes.join(", ")}. Use 'recomendo por você' para automação.`);
+    }
+    if (!estado.respostas) estado.respostas = {};
+    estado.respostas[args.pergunta_id] = args.resposta;
+    estado.pendentes = undefined;
+    if (pergunta.repetir !== false) {
+      estado.repeticoes = estado.repeticoes || {};
+      estado.repeticoes[args.pergunta_id] = (estado.repeticoes[args.pergunta_id] || 0) + 1;
+    }
+    salvar(estado);
+    let proximo = perguntas;
+    for (const g of perguntas) {
+      const p = g.perguntas.find((x) => x.id === args.pergunta_id);
+      if (!p) continue;
+      const idx = g.perguntas.indexOf(p);
+      if (idx + 1 < g.perguntas.length) {
+        proximo = perguntas;
+        for (const ng of perguntas) {
+          const np = ng.perguntas.find((x) => x.id === (g.perguntas[idx + 1]?.id));
+          if (np) { proximo = [ng, ...perguntas]; break; }
+        }
+        break;
+      }
+    }
+    const proximoGrupo = perguntas.find((g) => {
+      const p = g.perguntas.find((x) => x.id === args.pergunta_id);
+      return p && p.id === grupo.perguntas[grupo.perguntas.length - 1].id;
+    });
+    if (proximoGrupo && grupo.perguntas.indexOf(proximoGrupo.perguntas[grupo.perguntas.length - 1]) === grupo.perguntas.length - 1) {
+      const prox = perguntas[perguntas.indexOf(proximoGrupo) + 1];
+      if (prox) proximo = perguntas;
+    }
+    const resp = {
+      etapa_atual: estado.etapa_atual,
+      resposta_salva: { pergunta_id: args.pergunta_id, resposta: args.resposta },
+      proximo_passo: "Use get_question para obter a próxima pergunta.",
+      perguntas: estado.pendentes ? [estado.pendentes] : [],
+    };
+    return ok(JSON.stringify(resp, null, 2));
+  });
+
+  server.tool("get_summary", "Retorna um resumo do que o usuário já respondeu e o próximo passo.", {}, async () => {
+    const estado = carregar();
+    const briefing = estado.briefing || {};
+    const fisicos = estado.personagem ? estado.personagem.personagem : {};
+    const cenario = estado.cenario || {};
+    return ok(JSON.stringify({
+      etapa_atual: estado.etapa_atual,
+      briefing: {
+        plataformas: briefing.plataformas || [],
+        objetivo: briefing.objetivo || "não informado",
+        formato_anuncio: briefing.formato_anuncio || "não informado",
+        oferta: briefing.oferta || "não informado",
+        cta: briefing.cta || "genérico",
+        tom: briefing.tom || "não informado",
+        audio: briefing.audio || "não informado",
+      },
+      produto: estado.produto ? estado.produto.produto : null,
+      personagem: estado.personagem ? estado.personagem.personagem : null,
+      cenario: cenario.categoria || cenario.local || null,
+      dialogo: estado.dialogo || null,
+      pendente: estado.pendentes ? estado.pendentes : (estado.etapa_atual === "etapa5_concluido" ? "concluído" : "nenhum"),
+    }, null, 2));
+  });
+
+  server.tool("reset_session", "Zera a sessão (apaga as respostas e volta para o início).", {}, async () => {
+    salvar(estadoInicial());
+    return ok("Sessão zerada. Escolha 'start_chat' para começar novamente.");
+  });
   server.tool("check_environment", "Parte 0 — verifica ambiente (ffmpeg, tesseract, transporte), lista MCPs externos recomendados e o estado da sessão.", {}, async () => {
     const estado = carregar();
     const modoHttp = Boolean(process.env.PORT || process.env.RENDER || process.env.MCP_HTTP === "1");
